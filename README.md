@@ -102,6 +102,7 @@ dentro del Codespace y se puede perder.
 
 **Opción B — Terminal**
 
+
 ```bash
 git add student_work/
 git commit -m "descripción de lo que hice"
