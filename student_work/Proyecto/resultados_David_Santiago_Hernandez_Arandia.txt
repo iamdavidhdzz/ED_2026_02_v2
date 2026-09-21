@@ -1,0 +1,220 @@
+EVALUACION - Data Stream Processor
+============================================================
+Estudiante : David Santiago Hernandez Arandia
+Fecha      : 2026-09-21 19:06:19
+Python     : 3.12.13 (Linux)
+Evaluador  : v1.1
+Clase      : DataProcessor (modulo __main__)
+
+== Interfaz y restricciones ==
+
+[PASS ] Define add, process_next, undo, pending y current_value
+[PASS ] Se puede crear DataProcessor() sin argumentos
+[PASS ] __init__ crea una ArrayQueue, un ArrayStack y una list
+[PASS ] No sustituye Queue/Stack por deque u otra estructura
+[PASS ] ArrayQueue y ArrayStack son las del curso (no reimplementadas)
+
+   Interfaz y restricciones: 5/5 OK
+
+== Pruebas obligatorias (1-17) ==
+
+[PASS ] 1. pending() sobre un procesador vacio
+[PASS ] 2. Agregar un registro
+[PASS ] 3. Agregar varios registros
+[PASS ] 4. Procesamiento FIFO
+[PASS ] 5. Procesar un registro
+[PASS ] 6. Procesar varios registros
+[PASS ] 7. Actualizar una variable existente
+[PASS ] 8. Consultar el valor actual
+[PASS ] 9. Realizar un undo()
+[PASS ] 10. Varios undo() consecutivos
+[PASS ] 11. process_next() con la Queue vacia -> Empty
+[PASS ] 12. undo() con historial vacio -> Empty
+[PASS ] 13. Deshacer la creacion de un dato que no existia
+[PASS ] 14. Varios cambios sobre la misma variable
+[PASS ] 15. add() con formato incorrecto
+[PASS ] 16. add() con value no numerico
+[PASS ] 17. current_value() de un sensor/variable nunca procesado -> KeyError
+
+   Pruebas obligatorias (1-17): 17/17 OK
+
+== Casos borde adicionales ==
+
+[PASS ] undo de una creacion entre actualizaciones de otra variable
+[PASS ] Sensores y variables distintos no se mezclan
+[PASS ] Acepta int y float; sigue funcionando tras un Empty
+
+   Casos borde adicionales: 3/3 OK
+
+== Bonus: redo() (opcional) ==
+
+[PASS ] redo() tras un undo
+[PASS ] Varios undo y varios redo (orden inverso)
+[PASS ] redo() recrea un dato que habia sido deshecho
+
+   Bonus: redo() (opcional): 3/3 OK
+
+== RESUMEN ==
+
+   Interfaz y restricciones          5/ 5 OK   0 fallo(s)
+   Pruebas obligatorias (1-17)      17/17 OK   0 fallo(s)
+   Casos borde adicionales           3/ 3 OK   0 fallo(s)
+   Bonus: redo() (opcional)          3/ 3 OK   0 fallo(s)
+
+   Total sin bonus: 25/25 OK
+
+== CODIGO DE LA CLASE ==
+
+class DataProcessor:
+    def __init__(self):
+        """
+        Inicializa el procesador de flujo de datos con:
+        - Una cola vacía para registros pendientes (FIFO).
+        - Una pila vacía para el historial de cambios (LIFO).
+        - Una pila vacía para rehacer cambios deshechos (LIFO).
+        - Una lista vacía para mantener el estado actual de los datos.
+        """
+        self._queue = ArrayQueue()
+        self._stack = ArrayStack()
+        self._redo_stack = ArrayStack()
+        self._state = []
+
+    def pending(self) -> int:
+        """
+        Devuelve el número de registros pendientes por procesar en la cola.
+        """
+        return len(self._queue)
+
+    def add(self, record):
+        """
+        Agrega un registro (sensor, variable, valor) a la cola de pendientes.
+        Lanza ValueError si el registro no es una tupla/lista de exactamente 3
+        elementos, o si el valor no es numérico (int/float, sin contar bool).
+        """
+        # #correccion: se vuelve a validar isinstance(record, (tuple, list))
+        # y no solo len(record). Antes, cualquier objeto indexable con
+        # len() == 3 (p. ej. un dict de 3 llaves, o un string) podía colarse
+        # y producir un TypeError inesperado en vez del ValueError documentado
+        # y consistente que pide la guía del proyecto.
+        if not isinstance(record, (tuple, list)) or len(record) != 3:
+            raise ValueError("El registro debe ser una tupla o lista de exactamente 3 elementos: (sensor, variable, value).")
+
+        sensor = record[0]
+        variable = record[1]
+        value = record[2]
+
+        # #correccion: se usa isinstance() en vez de type() == ... para ser
+        # más robusto (p. ej. con subclases numéricas), excluyendo bool
+        # explícitamente ya que bool es subclase de int en Python.
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("El valor del registro (tercer elemento) debe ser numérico (int o float).")
+
+        self._queue.enqueue((sensor, variable, value))
+
+    def process_next(self):
+        """
+        Procesa el primer registro en cola (FIFO), actualiza el estado y guarda el historial.
+        Lanza Empty si no hay registros pendientes en la cola.
+        """
+        # 1. Si la cola está vacía, lanzar la excepción correspondiente
+        if self._queue.is_empty():
+            raise Empty("No hay registros pendientes para procesar.")
+
+        # 2. Extraer el registro pendiente de la cola
+        record = self._queue.dequeue()
+        sensor = record[0]
+        variable = record[1]
+        new_value = record[2]
+
+        # 3. Buscar si la clave (sensor, variable) ya existe en la lista de estado
+        posicion_encontrada = -1
+        valor_anterior = None
+
+        for i in range(len(self._state)):
+            item_actual = self._state[i]
+            if item_actual[0] == sensor and item_actual[1] == variable:
+                posicion_encontrada = i
+                valor_anterior = item_actual[2]
+                break
+
+        # 4. Guardar en la pila el estado previo (para el undo)
+        self._stack.push((sensor, variable, valor_anterior))
+
+        # 5. Reiniciar la pila de redo ante una nueva acción
+        self._redo_stack = ArrayStack()
+
+        # 6. Actualizar la lista de estado actual
+        if posicion_encontrada != -1:
+            self._state[posicion_encontrada] = (sensor, variable, new_value)
+        else:
+            self._state.append((sensor, variable, new_value))
+
+        return record
+
+    def undo(self):
+        """
+        Deshace el último cambio realizado por process_next() (LIFO).
+        Lanza Empty si el historial está vacío.
+        """
+        sensor, variable, valor_anterior = self._stack.pop()
+
+        posicion = -1
+        valor_actual = None
+
+        for i in range(len(self._state)):
+            item = self._state[i]
+            if item[0] == sensor and item[1] == variable:
+                posicion = i
+                valor_actual = item[2]
+                break
+
+        self._redo_stack.push((sensor, variable, valor_actual, valor_anterior))
+
+        if posicion != -1:
+            if valor_anterior is None:
+                self._state.pop(posicion)
+            else:
+                self._state[posicion] = (sensor, variable, valor_anterior)
+
+    def redo(self):
+        """
+        Rehace el último cambio revertido por undo() (LIFO).
+        Lanza Empty si no hay acciones para rehacer.
+        """
+        if self._redo_stack.is_empty():
+            raise Empty("No hay acciones pendientes para rehacer.")
+
+        sensor, variable, valor_a_restaurar, valor_anterior = self._redo_stack.pop()
+
+        # Buscar el elemento en la lista de estado actual
+        posicion = -1
+        for i in range(len(self._state)):
+            item = self._state[i]
+            if item[0] == sensor and item[1] == variable:
+                posicion = i
+                break
+
+        # Guardar nuevamente en la pila de deshacer (undo)
+        self._stack.push((sensor, variable, valor_anterior))
+
+        # Aplicar el valor que se había deshecho
+        if posicion != -1:
+            self._state[posicion] = (sensor, variable, valor_a_restaurar)
+        else:
+            self._state.append((sensor, variable, valor_a_restaurar))
+
+    def current_value(self, sensor, variable):
+        """
+        Devuelve el valor actual de un (sensor, variable).
+        Lanza KeyError si la combinación nunca ha sido procesada.
+        """
+        for i in range(len(self._state)):
+            item = self._state[i]
+            if item[0] == sensor and item[1] == variable:
+                return item[2]
+
+        raise KeyError(f"No existe ningún registro procesado para ({sensor}, {variable})")
+
+== INTEGRIDAD ==
+SHA256 codigo de la clase : 9fee92042e7901d35a60c46c31f94900b1864e920bf2e9f49b62a45b35a0e57f
+SHA256 de este informe    : a2ade81ac24edc4d857a873f0c0f1d97523b1c692731df4b7b11a31f7b0d6802
